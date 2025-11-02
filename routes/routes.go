@@ -8,6 +8,7 @@ import (
 	"passport-booking/controllers/booking"
 	"passport-booking/controllers/delivery"
 	"passport-booking/controllers/passport_percel"
+	"passport-booking/controllers/report"
 	"passport-booking/controllers/user"
 	httpServices "passport-booking/httpServices/sso"
 	"passport-booking/logger"
@@ -27,6 +28,7 @@ func SetupRoutes(app *fiber.App, db *gorm.DB) {
 	deliveryController := delivery.NewDeliveryController(db, asyncLogger)
 	regionalPassportOfficeController := passport_percel.NewRegionalPassportOfficeController(db, asyncLogger)
 	parcelBookingController := passport_percel.NewParcelBookingController(db, asyncLogger)
+	reportController := report.NewReportController(db, asyncLogger)
 
 	// Start the async logger processing goroutine
 	go asyncLogger.ProcessLog()
@@ -209,4 +211,15 @@ func SetupRoutes(app *fiber.App, db *gorm.DB) {
 	parcelBookingGroup.Get("/list", middleware.RequirePermissions(
 		constants.PermParcelOperatorFull,
 	), parcelBookingController.Index)
+
+	/*=============================================================================
+	| Report Routes
+	===============================================================================*/
+
+	reportGroup := api.Group("/report")
+
+	// Add report routes here
+	reportGroup.Post("/single-delivered", middleware.RequirePermissions(
+		constants.PermPostmanFull,
+	), reportController.SingleDeliveredReport)
 }
