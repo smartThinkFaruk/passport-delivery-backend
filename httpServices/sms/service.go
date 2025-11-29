@@ -33,7 +33,7 @@ type SMSResponse struct {
 
 // NewSMSService creates a new SMS service
 func NewSMSService() *SMSService {
-	apiURL := os.Getenv("SMS_API_URL")
+	apiURL := os.Getenv("EKDAK_BACKEND_API_URL")
 	if apiURL == "" {
 		apiURL = "https://ekdak.com/message-broker/send-sms/" // Default URL
 	}

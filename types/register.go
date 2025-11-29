@@ -11,6 +11,7 @@ type RegisterUserRequest struct {
 	Username    string `json:"username"`
 	Access      string `json:"access"` // Access token for the user
 }
+
 type RegisterUserResponse struct {
 	Status  string         `json:"status"`
 	Code    int            `json:"code"`

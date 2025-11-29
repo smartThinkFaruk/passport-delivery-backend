@@ -2,6 +2,7 @@ package booking
 
 import (
 	"fmt"
+	"os"
 	"passport-booking/database"
 	"passport-booking/logger"
 	addressModel "passport-booking/models/address"
@@ -265,12 +266,12 @@ func (bc *BookingController) Store(c *fiber.Ctx) error {
 		if !ok {
 			continue
 		}
-		if strings.HasPrefix(permStr, "passport-booking.") {
+		if strings.HasPrefix(permStr, "e-passport-delivery.") {
 			parts := strings.Split(permStr, ".")
 			if len(parts) >= 2 {
 				prefix := parts[0]        // This will be "passport-booking"
 				extractedRole := parts[1] // This will be "customer" or "agent"
-				if prefix != "passport-booking" {
+				if prefix != "e-passport-delivery" {
 					return bc.sendResponseWithLog(c, fiber.StatusForbidden, types.ApiResponse{
 						Message: "Invalid permission prefix",
 						Status:  fiber.StatusForbidden,
@@ -297,7 +298,7 @@ func (bc *BookingController) Store(c *fiber.Ctx) error {
 	}
 	if !foundPermission {
 		return bc.sendResponseWithLog(c, fiber.StatusForbidden, types.ApiResponse{
-			Message: "No valid passport-booking permission found",
+			Message: "No valid e-passport-delivery permission found",
 			Status:  fiber.StatusForbidden,
 			Data:    nil,
 		})
@@ -777,13 +778,18 @@ func (bc *BookingController) DeliveryPhoneSendOtp(c *fiber.Ctx) error {
 	responseData := map[string]interface{}{
 		"booking": booking,
 	}
-
+	_env := os.Getenv("APP_ENV")
 	if otpRecord != nil {
 		responseData["otp_info"] = map[string]interface{}{
 			"otp_id":     otpRecord.ID,
 			"expires_at": otpRecord.ExpiresAt,
 			"phone":      booking.DeliveryPhone,
 		}
+	}
+
+	if _env != "production" && otpRecord != nil {
+		// Include OTP code in response for non-production environments
+		responseData["otp_info"].(map[string]interface{})["otp_code"] = otpRecord.OTPCode
 	}
 
 	return bc.sendResponseWithLog(c, fiber.StatusOK, types.ApiResponse{

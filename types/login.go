@@ -6,6 +6,19 @@ type LoginRequest struct {
 	Password    string `json:"password"`
 }
 
+func (r LandRequest) Validate() string {
+	// Ensure that login identifier is provided (either email or phone)
+	if r.Access == "" {
+		return "Access token is required"
+	}
+
+	// Validate refresh token
+	if r.Refresh == "" {
+		return "Refresh token is required"
+	}
+	return ""
+}
+
 type LoginDMSRequest struct {
 	UserName string `json:"username"` // Field to allow login via email or phone
 	Password string `json:"password"`
@@ -14,6 +27,11 @@ type LoginDMSRequest struct {
 type ErrorResponse struct {
 	Message string `json:"message"`
 	Status  int    `json:"status"`
+}
+
+type LandRequest struct {
+	Access  string `json:"access"` // Field to allow login via email or phone
+	Refresh string `json:"refresh"`
 }
 
 type LoginUserResponse struct {

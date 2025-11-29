@@ -44,6 +44,7 @@ func SetupRoutes(app *fiber.App, db *gorm.DB) {
 	api := app.Group("/api")
 	api.Post("/get-service-token", authController.GetServiceToken)
 	api.Post("/login", authController.Login)
+	api.Post("/land", authController.Land)
 	api.Post("/register", authController.Register)
 
 	/*=============================================================================

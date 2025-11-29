@@ -52,7 +52,9 @@ func main() {
 		"http://192.168.1.76:3000": {},
 		"http://192.168.1.76:3003": {},
 		"http://192.168.1.71:3001": {},
+		"http://192.168.1.71:3006": {},
 		"http://192.168.1.66:3001": {},
+		"http://192.168.1.66:3002": {},
 	}
 	app.Use(cors.New(cors.Config{
 		AllowOriginsFunc: func(origin string) bool {
@@ -68,10 +70,10 @@ func main() {
 	// Use new consolidated routes
 	routes.SetupRoutes(app, db)
 
-	// app_host := "0.0.0.0"
-	app_host := os.Getenv("APP_HOST")
-	// app_port := "8004"
-	app_port := os.Getenv("APP_PORT")
+	app_host := "0.0.0.0"
+	// app_host := os.Getenv("APP_HOST")
+	app_port := "8009"
+	// app_port := os.Getenv("APP_PORT")
 	app.Listen(app_host + ":" + app_port)
 	// Additional application code can follow...
 }

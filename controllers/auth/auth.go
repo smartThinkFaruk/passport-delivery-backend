@@ -2,11 +2,14 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"passport-booking/database"
 	httpServices "passport-booking/httpServices/sso"
 	"passport-booking/logger"
+	sso "passport-booking/middleware"
 	"passport-booking/models/user"
 	"passport-booking/types"
 	"passport-booking/utils"
@@ -15,6 +18,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type AuthController struct {
@@ -176,6 +180,210 @@ func (h *AuthController) Register(c *fiber.Ctx) error {
 
 	// tx.Commit()
 
+}
+
+func (h *AuthController) Land(c *fiber.Ctx) error {
+	// 1) Parse & validate
+	var req types.LandRequest
+	if err := c.BodyParser(&req); err != nil {
+		logger.Error("Error parsing request body", err)
+		return c.Status(fiber.StatusBadRequest).JSON(types.ApiResponse{
+			Message: fmt.Errorf("Error parsing request body: %v", err).Error(),
+			Status:  fiber.StatusBadRequest,
+			Data:    nil,
+		})
+	}
+
+	if v := req.Validate(); v != "" {
+		logger.Error(v, nil)
+		return c.Status(fiber.StatusBadRequest).JSON(types.ApiResponse{
+			Message: v,
+			Status:  fiber.StatusBadRequest,
+			Data:    nil,
+		})
+	}
+
+	// 2) Verify JWT and extract claims
+	claims, err := sso.VerifyJWT(req.Access)
+	log.Println("Verifying JWT token...", claims)
+	if err != nil {
+		log.Printf("JWT verification failed: %v", err)
+		return c.Status(fiber.StatusUnauthorized).JSON(types.ApiResponse{
+			Message: "Invalid or expired token",
+			Status:  fiber.StatusUnauthorized,
+			Data:    nil,
+		})
+	}
+	fmt.Println("Verified JWT claims:", claims)
+
+	// 3) Extract user data from claims
+	uid, ok := claims["uuid"].(string)
+	if !ok || strings.TrimSpace(uid) == "" {
+		logger.Error("UUID not found in JWT claims", nil)
+		return c.Status(fiber.StatusBadRequest).JSON(types.ApiResponse{
+			Message: "Invalid token: UUID missing",
+			Status:  fiber.StatusBadRequest,
+			Data:    nil,
+		})
+	}
+
+	nowStr := time.Now().Format("2006-01-02 03:04:05 PM")
+
+	// 4) Upsert user + EnsureUserAccount in one transaction (similar to login logic)
+	if err := h.db.Transaction(func(tx *gorm.DB) error {
+		var u user.User
+
+		// Pull required claim(s)
+		uid, _ := claims["uuid"].(string)
+		username, _ := claims["username"].(string)
+		phone, _ := claims["phone"].(string)
+
+		// (1) Try by USERNAME first
+		if strings.TrimSpace(username) != "" {
+			if err := tx.Where("username = ?", username).First(&u).Error; err == nil {
+				// If DB uuid differs (or empty), overwrite with token uuid
+				if strings.TrimSpace(uid) != "" && u.Uuid != uid {
+					logger.Info(fmt.Sprintf("Username match; updating UUID %q -> %q for user ID %d", u.Uuid, uid, u.ID))
+					u.Uuid = uid
+				}
+				applyClaimsToUser(&u, claims)
+				// ensurePostMasterSystemAccount(tx, &u, claims)
+				if err := tx.Save(&u).Error; err != nil {
+					return fmt.Errorf("update user by username failed: %w", err)
+				}
+				// if _, err := EnsureUserAccount(tx, u.ID); err != nil {
+				// 	return fmt.Errorf("ensure user-account failed: %w", err)
+				// }
+				return nil
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("query user by username failed: %w", err)
+			}
+		}
+
+		// (2) Try by UUID
+		if strings.TrimSpace(uid) != "" {
+			if err := tx.Where("uuid = ?", uid).First(&u).Error; err == nil {
+				applyClaimsToUser(&u, claims)
+				// ensurePostMasterSystemAccount(tx, &u, claims)
+				if err := tx.Save(&u).Error; err != nil {
+					return fmt.Errorf("update user by uuid failed: %w", err)
+				}
+				// if _, err := EnsureUserAccount(tx, u.ID); err != nil {
+				// 	return fmt.Errorf("ensure user-account failed: %w", err)
+				// }
+				return nil
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("query user by uuid failed: %w", err)
+			}
+		}
+
+		// (3) Try by PHONE
+		if strings.TrimSpace(phone) != "" {
+			if err := tx.Where("phone = ?", phone).First(&u).Error; err == nil {
+				// Attach SSO uuid if missing/different
+				if strings.TrimSpace(uid) != "" && u.Uuid != uid {
+					logger.Info(fmt.Sprintf("Phone match; updating UUID %q -> %q for user ID %d", u.Uuid, uid, u.ID))
+					u.Uuid = uid
+				}
+				applyClaimsToUser(&u, claims)
+				// ensurePostMasterSystemAccount(tx, &u, claims)
+				if err := tx.Save(&u).Error; err != nil {
+					return fmt.Errorf("merge user by phone failed: %w", err)
+				}
+				// if _, err := EnsureUserAccount(tx, u.ID); err != nil {
+				// 	return fmt.Errorf("ensure user-account failed: %w", err)
+				// }
+				return nil
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("query user by phone failed: %w", err)
+			}
+		}
+
+		// (4) Create NEW user (none matched)
+		nu := user.User{Uuid: uid}
+		applyClaimsToUser(&nu, claims)
+		// set PostOfficeBranch / post-master system account inside helper after nu has an ID
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&nu).Error; err != nil {
+			return fmt.Errorf("create user failed: %w", err)
+		}
+		if err := tx.Where("uuid = ?", uid).First(&nu).Error; err != nil {
+			return fmt.Errorf("fetch created user failed: %w", err)
+		}
+		// ensurePostMasterSystemAccount(tx, &nu, claims)
+		if err := tx.Save(&nu).Error; err != nil {
+			return fmt.Errorf("finalize new user failed: %w", err)
+		}
+		// if _, err := EnsureUserAccount(tx, nu.ID); err != nil {
+		// 	return fmt.Errorf("ensure user-account failed: %w", err)
+		// }
+		return nil
+	}); err != nil {
+		logger.Error("Land DB transaction failed", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(types.ApiResponse{
+			Message: "Token verified but local sync failed",
+			Status:  fiber.StatusInternalServerError,
+			Data:    nil,
+		})
+	}
+
+	// 5) Structured log
+	h.loggerInstance.Log(types.LogEntry{
+		Method:          c.Method(),
+		URL:             c.OriginalURL(),
+		RequestBody:     string(c.Body()),
+		ResponseBody:    `{"message": "Land successful", "status": 200}`,
+		RequestHeaders:  string(c.Request().Header.Header()),
+		ResponseHeaders: string(c.Response().Header.Header()),
+		StatusCode:      fiber.StatusOK,
+		CreatedAt:       time.Now(),
+	})
+
+	logger.Success("User landed successfully. uuid: " + uid + " at " + nowStr)
+	return c.Status(fiber.StatusOK).JSON(types.ApiResponse{
+		Message: "Land successful",
+		Status:  fiber.StatusOK,
+		Data: map[string]interface{}{
+			"uuid": uid,
+		},
+	})
+}
+
+func applyClaimsToUser(u *user.User, claims map[string]interface{}) {
+	if username, ok := claims["username"].(string); ok && username != "" {
+		u.Username = username
+	}
+	if phone, ok := claims["phone"].(string); ok {
+		u.Phone = phone
+	}
+	if pv, ok := claims["phone_verified"].(bool); ok {
+		u.PhoneVerified = pv
+	}
+	if ev, ok := claims["email_verified"].(bool); ok {
+		u.EmailVerified = ev
+	}
+	if avatar, ok := claims["avatar"].(string); ok {
+		u.Avatar = avatar
+	}
+	if nonce, ok := claims["nonce"].(float64); ok {
+		u.Nonce = int(nonce)
+	}
+	if legalName, ok := claims["legal_name"].(string); ok && legalName != "" {
+		u.LegalName = legalName
+	}
+	if email := claims["email"]; email != nil {
+		if emailStr, ok := email.(string); ok && emailStr != "" {
+			u.Email = &emailStr
+		}
+	}
+	if permissions, ok := claims["permissions"].([]interface{}); ok {
+		var permStrings []string
+		for _, p := range permissions {
+			if pStr, ok := p.(string); ok {
+				permStrings = append(permStrings, pStr)
+			}
+		}
+		u.Permissions = user.StringSlice(permStrings)
+	}
 }
 
 func (h *AuthController) Login(c *fiber.Ctx) error {
